@@ -1,0 +1,41 @@
+# Swift build caches and local app exports
+.build/
+.swiftpm/
+dist/
+
+# Xcode build artifacts
+build/
+DerivedData/
+*.xcarchive
+*.xcresult
+
+# Xcode user state (machine-specific)
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Swift Package Manager resolved versions (can be committed, but often gitignored for apps)
+# Uncomment to exclude:
+# Uptimelet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+*.icloud
+
+# Xcode local settings
+*.xcuserstate
+xcuserdata/
+
+# Instruments
+*.trace
+
+# Crashlytics
+com_crashlytics_export_strings.csv
+
+# CocoaPods (not used here, but just in case)
+Pods/
+
+# Derived Swift sources
+*.generated.swift
