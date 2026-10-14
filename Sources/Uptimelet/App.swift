@@ -27,6 +27,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var endpointWindows: [UUID: NSWindow] = [:]
     private var subscriptions = Set<AnyCancellable>()
     private var appearanceObservation: NSKeyValueObservation?
+    private lazy var iconRenderer = StatusItemIconRenderer { [weak self] image, tooltip, accessibilityLabel in
+        guard let button = self?.statusItem.button else { return }
+        button.image = image
+        button.toolTip = tooltip
+        button.setAccessibilityLabel(accessibilityLabel)
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMenus()
@@ -43,9 +49,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             showHistory: { [weak self] in self?.showHistory() },
             editEndpoint: { [weak self] endpoint in self?.showEndpointEditor(endpoint) }
         ))
-        monitor.objectWillChange.sink { [weak self] _ in
-            DispatchQueue.main.async { self?.updateIcon() }
-        }.store(in: &subscriptions)
+        monitor.$state.combineLatest(monitor.$now)
+            .map { state, now in state.overallStatus(at: now) }
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] status in self?.updateIcon(status: status) }
+            .store(in: &subscriptions)
         updateIcon()
         monitor.start()
     }
@@ -89,13 +98,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func updateIcon() {
-        let status = monitor.overallStatus
+    private func updateIcon(status: OverallStatus? = nil) {
         let dark = statusItem.button?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        let image = BeaconIcon.image(for: status.beaconState, dark: dark)
-        statusItem.button?.image = image
-        statusItem.button?.toolTip = "Uptimelet · \(status.title)"
-        statusItem.button?.setAccessibilityLabel("Uptimelet: \(status.title)")
+        iconRenderer.update(status: status ?? monitor.overallStatus, dark: dark)
     }
 
     private func showSettings() {
@@ -149,6 +154,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.isReleasedWhenClosed = false
         window.center()
         return window
+    }
+}
+
+@MainActor
+final class StatusItemIconRenderer {
+    private struct Presentation: Equatable {
+        let status: OverallStatus
+        let dark: Bool
+    }
+
+    private var lastPresentation: Presentation?
+    private let display: (NSImage, String, String) -> Void
+
+    init(display: @escaping (NSImage, String, String) -> Void) { self.display = display }
+
+    func update(status: OverallStatus, dark: Bool) {
+        let presentation = Presentation(status: status, dark: dark)
+        guard presentation != lastPresentation else { return }
+        // Set before assigning the image: AppKit's rendering may notify appearance
+        // observers again. Identical or reentrant notifications must not redraw it.
+        lastPresentation = presentation
+        display(BeaconIcon.image(for: status.beaconState, dark: dark),
+                "Uptimelet · \(status.title)", "Uptimelet: \(status.title)")
     }
 }
 

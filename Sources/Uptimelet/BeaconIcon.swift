@@ -4,6 +4,11 @@ import AppKit
 // Coordinates use a 20-point canvas with an upward y axis.
 enum BeaconIcon {
     enum State: Equatable { case healthy, recovered, down, unknown, paused }
+    private static let imageCache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 32
+        return cache
+    }()
 
     static func color(for state: State) -> NSColor {
         switch state {
@@ -15,12 +20,29 @@ enum BeaconIcon {
     }
 
     static func image(for state: State, size: CGFloat = 20, dark: Bool = false) -> NSImage {
+        let key = "\(state):\(size):\(dark)" as NSString
+        if let cached = imageCache.object(forKey: key) { return cached }
         let foreground = dark ? NSColor.white : NSColor(srgbRed: 0.18, green: 0.22, blue: 0.27, alpha: 1)
-        let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
-            draw(in: rect, state: state, foreground: foreground)
-            return true
+        let image = NSImage(size: NSSize(width: size, height: size))
+        // Rasterize once at both screen scales. Drawing a menu bar replicant should
+        // only copy pixels, rather than invoke a custom image drawing callback.
+        for scale: CGFloat in [1, 2] {
+            let pixels = Int((size * scale).rounded(.up))
+            let context = CGContext(data: nil, width: pixels, height: pixels,
+                                    bitsPerComponent: 8, bytesPerRow: 0,
+                                    space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            context.scaleBy(x: CGFloat(pixels) / size, y: CGFloat(pixels) / size)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+            draw(in: NSRect(x: 0, y: 0, width: size, height: size), state: state, foreground: foreground)
+            NSGraphicsContext.restoreGraphicsState()
+            let representation = NSBitmapImageRep(cgImage: context.makeImage()!)
+            representation.size = image.size
+            image.addRepresentation(representation)
         }
         image.isTemplate = false
+        imageCache.setObject(image, forKey: key)
         return image
     }
 
