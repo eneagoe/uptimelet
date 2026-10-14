@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 #if canImport(UptimeCore)
 import UptimeCore
 #endif
@@ -151,6 +152,8 @@ struct SettingsView: View {
     let close: () -> Void
     let editEndpoint: (Endpoint) -> Void
     @State private var error: String?
+    @State private var transferMessage: String?
+    @State private var isTransferring = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -190,11 +193,73 @@ struct SettingsView: View {
             Text("Each URL has its own polling interval, status window, and timeout. History is kept locally for 7 days.")
                 .font(.caption).foregroundColor(.secondary)
             if let error { Text(error).font(.callout).foregroundColor(.red) }
+            if let transferMessage {
+                Text(transferMessage).font(.callout).foregroundColor(.secondary)
+            }
             HStack {
+                Button(action: importURLs) { Label("Import URLs…", systemImage: "square.and.arrow.down") }
+                    .disabled(isTransferring)
+                Button(action: exportURLs) { Label("Export URLs…", systemImage: "square.and.arrow.up") }
+                    .disabled(isTransferring || monitor.state.endpoints.isEmpty)
                 Spacer()
                 Button("Done", action: close).keyboardShortcut(.defaultAction)
             }
         }.padding(24).frame(minWidth: 620, minHeight: 530)
+    }
+
+    private func exportURLs() {
+        do {
+            let data = try monitor.exportConfiguration()
+            let panel = NSSavePanel()
+            panel.title = "Export URLs"
+            panel.message = "Export URLs, names, polling settings, and enabled states."
+            panel.nameFieldStringValue = "Uptimelet-URLs.json"
+            panel.allowedContentTypes = [.json]
+            panel.canCreateDirectories = true
+            error = nil
+            transferMessage = nil
+            isTransferring = true
+            present(panel) { response in
+                isTransferring = false
+                guard response == .OK, let url = panel.url else { return }
+                do {
+                    try data.write(to: url, options: .atomic)
+                    transferMessage = "Exported URLs to \(url.lastPathComponent)."
+                } catch { self.error = error.localizedDescription }
+            }
+        } catch { self.error = error.localizedDescription }
+    }
+
+    private func importURLs() {
+        let panel = NSOpenPanel()
+        panel.title = "Import URLs"
+        panel.message = "Add new URLs and update matching URLs. Other URLs and local check history are kept."
+        panel.prompt = "Import"
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        error = nil
+        transferMessage = nil
+        isTransferring = true
+        present(panel) { response in
+            isTransferring = false
+            guard response == .OK, let url = panel.url else { return }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let result = try monitor.importConfiguration(Data(contentsOf: url))
+                transferMessage = result.message
+            } catch { self.error = error.localizedDescription }
+        }
+    }
+
+    private func present(_ panel: NSSavePanel, completion: @escaping (NSApplication.ModalResponse) -> Void) {
+        if let window = NSApplication.shared.keyWindow {
+            panel.beginSheetModal(for: window, completionHandler: completion)
+        } else {
+            panel.begin(completionHandler: completion)
+        }
     }
 }
 

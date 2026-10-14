@@ -45,6 +45,14 @@ A check uses an uncached **GET**, follows redirects, and stops once final respon
 
 URLs can have an optional display name and can be paused individually. Paused URLs do not affect the overall status. Editing a URL starts its status fresh; earlier checks remain in history. Removing a URL also preserves its checks until they expire.
 
+## Transfer URLs between Macs
+
+Open **Settings → Export URLs…** to save `Uptimelet-URLs.json`, then transfer the file to another Mac and choose **Settings → Import URLs…** there. The file contains URL addresses, names, enabled states, and each URL's polling interval, status window, and timeout. Check history stays on each Mac.
+
+Import adds new URLs and updates matching URL addresses, preserving local identifiers and history. URLs absent from the file are kept. Re-importing the same file does not create extra entries. New or updated active URLs are checked immediately; paused URLs stay paused and unchanged schedules continue. Intentionally repeated URLs are preserved. Invalid files or failed saves leave the current configuration unchanged.
+
+The export is readable JSON with a format identifier (`uptimelet-urls`), format version (`1`), and an `endpoints` array. You can edit the names, addresses, enabled flags, and numeric settings before importing; the full file is validated before anything is applied.
+
 ## Local data and logs
 
 Settings and history are stored in:

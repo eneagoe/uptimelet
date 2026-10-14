@@ -73,6 +73,11 @@ final class Monitor: ObservableObject {
         var updated = state
         updated.endpoints = endpoints.map { $0.normalized() }
         try updated.validate()
+        apply(updated)
+        persist()
+    }
+
+    private func apply(_ updated: AppState) {
         let previous = Dictionary(uniqueKeysWithValues: state.endpoints.map { ($0.id, $0) })
         let current = Dictionary(uniqueKeysWithValues: updated.endpoints.map { ($0.id, $0) })
         for endpoint in state.endpoints where current[endpoint.id] != endpoint {
@@ -86,8 +91,29 @@ final class Monitor: ObservableObject {
                 nextChecks[endpoint.id] = last.addingTimeInterval(endpoint.settings.pollingMinutes * 60)
             }
         }
-        persist()
         drainQueue()
+    }
+
+    func exportConfiguration() throws -> Data {
+        try ConfigurationTransfer.export(state.endpoints)
+    }
+
+    @discardableResult
+    func importConfiguration(_ data: Data) throws -> ConfigurationImport {
+        let imported = try ConfigurationTransfer.decode(data)
+        let result = try ConfigurationTransfer.merge(imported, into: state.endpoints)
+        guard canSave else { throw ConfigurationTransferError.storageUnavailable }
+        var updated = state
+        updated.endpoints = result.endpoints
+        let previous = Dictionary(uniqueKeysWithValues: state.endpoints.map { ($0.id, $0) })
+        // Save first: malformed files or failed writes cannot partially change live settings.
+        try store.save(updated)
+        apply(updated)
+        storageError = nil
+        for endpoint in state.activeEndpoints where previous[endpoint.id] != endpoint {
+            checkNow(endpointID: endpoint.id)
+        }
+        return result
     }
 
     func saveEndpoint(_ endpoint: Endpoint) throws {

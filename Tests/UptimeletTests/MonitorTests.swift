@@ -231,6 +231,86 @@ final class MonitorTests: XCTestCase {
         draft.address = "not a URL"
         XCTAssertThrowsError(try draft.validatedEndpoint())
     }
+
+    @MainActor
+    func testImportPreservesHistoryPersistsSettingsAndStartsOnlyChangedURLs() async throws {
+        let store = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: store.fileURL.deletingLastPathComponent()) }
+        let monitor = Monitor(store: store, checker: RecordingChecker())
+        let original = Endpoint(name: "Local", address: "https://example.com/one")
+        let untouched = Endpoint(address: "https://example.com/two")
+        try monitor.update(endpoints: [original, untouched])
+        monitor.checkNow()
+        try await waitUntil { !monitor.isChecking }
+        let logs = monitor.state.records
+        let untouchedSchedule = monitor.nextChecks[untouched.id]
+        let imported = Endpoint(name: "Imported", address: original.address, settings: MonitorSettings(pollingMinutes: 3))
+        let added = Endpoint(address: "https://example.com/new", enabled: false)
+        let data = try ConfigurationTransfer.export([imported, added])
+        let result = try monitor.importConfiguration(data)
+        XCTAssertEqual(result.added, 1)
+        XCTAssertEqual(result.updated, 1)
+        XCTAssertEqual(monitor.state.records, logs)
+        XCTAssertEqual(monitor.checkingEndpointIDs, [original.id])
+        XCTAssertEqual(monitor.nextChecks[untouched.id], untouchedSchedule)
+        XCTAssertEqual(monitor.state.endpoints[0].id, original.id)
+        XCTAssertEqual(monitor.state.endpoints[0].settings.pollingMinutes, 3)
+        XCTAssertEqual(try store.load().endpoints, monitor.state.endpoints)
+        try await waitUntil { !monitor.isChecking }
+        let repeated = try monitor.importConfiguration(data)
+        XCTAssertEqual(repeated.unchanged, 2)
+        XCTAssertFalse(monitor.isChecking)
+        XCTAssertEqual(monitor.state.endpoints.count, 3)
+        XCTAssertEqual(monitor.state.records.filter { $0.endpointID == untouched.id }.count, 1)
+        XCTAssertTrue(logs.allSatisfy { monitor.state.records.contains($0) })
+    }
+
+    @MainActor
+    func testInvalidImportLeavesSettingsLogsAndScheduleUntouched() async throws {
+        let store = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: store.fileURL.deletingLastPathComponent()) }
+        let monitor = Monitor(store: store, checker: RecordingChecker())
+        let endpoint = Endpoint(address: "https://example.com")
+        try monitor.saveEndpoint(endpoint)
+        monitor.checkNow()
+        try await waitUntil { !monitor.isChecking }
+        let state = monitor.state
+        let schedules = monitor.nextChecks
+        let saved = try Data(contentsOf: store.fileURL)
+        XCTAssertThrowsError(try monitor.importConfiguration(Data("not JSON".utf8)))
+        XCTAssertEqual(monitor.state, state)
+        XCTAssertEqual(monitor.nextChecks, schedules)
+        XCTAssertEqual(try Data(contentsOf: store.fileURL), saved)
+    }
+
+    @MainActor
+    func testImportWriteFailureCannotChangeLiveConfiguration() throws {
+        let store = temporaryStore()
+        let directory = store.fileURL.deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let monitor = Monitor(store: store, checker: RecordingChecker())
+        try Data("blocked parent directory".utf8).write(to: directory)
+        let data = try ConfigurationTransfer.export([Endpoint(address: "https://example.com")])
+        XCTAssertThrowsError(try monitor.importConfiguration(data))
+        XCTAssertTrue(monitor.state.endpoints.isEmpty)
+        XCTAssertFalse(monitor.isChecking)
+        XCTAssertNil(monitor.nextCheck)
+    }
+
+    @MainActor
+    func testMonitorExportContainsURLsAndNoCheckHistory() async throws {
+        let store = temporaryStore()
+        defer { try? FileManager.default.removeItem(at: store.fileURL.deletingLastPathComponent()) }
+        let monitor = Monitor(store: store, checker: RecordingChecker())
+        try monitor.saveEndpoint(Endpoint(address: "https://example.com"))
+        monitor.checkNow()
+        try await waitUntil { !monitor.isChecking }
+        let exported = try monitor.exportConfiguration()
+        XCTAssertEqual(try ConfigurationTransfer.decode(exported), monitor.state.endpoints)
+        let json = try JSONSerialization.jsonObject(with: exported) as! [String: Any]
+        XCTAssertNil(json["records"])
+        XCTAssertFalse(monitor.state.records.isEmpty)
+    }
 }
 
 private actor RecordingChecker: EndpointChecking {
